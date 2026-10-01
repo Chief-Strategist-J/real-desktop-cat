@@ -3,7 +3,7 @@
 Autonomous Photorealistic Desktop Cat Companion
 ===============================================
 Features:
-- Real-time Mouse Cursor Tracking & Following
+- Full 2D (X & Y Axis) Mouse Cursor Tracking & Following
 - Active Keyboard Typing Detection with Cute Reactions
 - 100+ Real Cat Library Gallery
 - Photorealistic Transparency (GNOME / X11)
@@ -14,6 +14,7 @@ import ctypes
 from enum import Enum, auto
 import fcntl
 import json
+import math
 import os
 import random
 import signal
@@ -46,7 +47,7 @@ CONFIRMED_CATS = {
 }
 
 CAT_THOUGHTS = [
-    "Purrrrr... keeping you company! 🐾",
+    "Purrrrr... following your cursor! 🐾",
     "Remember to stay hydrated! 💧",
     "Deep focus mode activated! 💻✨",
     "Stretch your shoulders for 5s! 🧘",
@@ -54,7 +55,7 @@ CAT_THOUGHTS = [
     "Watching you code... very impressive! ⌨️",
     "Rest your eyes: look 20 feet away for 20s! 🌿",
     "*content cat purrs* ❤️",
-    "Following you along your dock! 🐾"
+    "Following your mouse anywhere on screen! 🐾"
 ]
 
 TYPING_CHEERS = [
@@ -90,13 +91,10 @@ class X11KeyboardDetector:
         current_keys = (ctypes.c_char * 32)()
         self.x11.XQueryKeymap(self.display, current_keys)
         
-        # Check if any key is currently pressed
-        pressed = False
         for b in bytes(current_keys):
             if b != 0:
-                pressed = True
-                break
-        return pressed
+                return True
+        return False
 
     def close(self):
         if self.available and self.display:
@@ -139,22 +137,24 @@ class SingleInstanceGuard:
 # State & Autonomous Behavior
 # ---------------------------------------------------------------------------
 class CatState(Enum):
-    RESTING = auto()   # Lying down / resting on mat
-    FOLLOWING = auto() # Actively walking & tracking mouse cursor
-    TYPING_CHEER = auto() # Cheering furiously when typing is detected
-    ALERT = auto()     # Sitting alert
+    RESTING = auto()       # Lying down / resting on mat
+    FOLLOWING = auto()     # Actively moving & following mouse in 2D (X & Y)
+    TYPING_CHEER = auto()  # Cheering when typing is detected
+    ALERT = auto()         # Sitting alert
 
 
 class AutonomousCatBrain:
-    def __init__(self, screen_w: int):
+    def __init__(self, screen_w: int, screen_h: int):
         self.screen_w = screen_w
+        self.screen_h = screen_h
         self.current_state = CatState.RESTING
         self.state_time_remaining = 6.0
         self.follow_mouse = True
         self.target_x = 0.0
+        self.target_y = 0.0
         self.last_typing_time = 0.0
 
-    def tick(self, dt: float, current_x: float, mouse_x: int, is_typing: bool) -> tuple[CatState, bool]:
+    def tick(self, dt: float, current_x: float, current_y: float, mouse_x: int, mouse_y: int, is_typing: bool) -> tuple[CatState, bool]:
         now = time.time()
 
         # Handle Keyboard Typing Detection
@@ -165,37 +165,43 @@ class AutonomousCatBrain:
                 self.state_time_remaining = 3.0
                 return self.current_state, True
 
-        # If typing cheered recently, keep cheering for a couple seconds
         if now - self.last_typing_time < 2.5:
             return self.current_state, False
 
-        # Real-time Mouse Cursor Following
+        # Real-time Full 2D (X & Y) Mouse Cursor Tracking
         if self.follow_mouse:
-            target = float(max(60, min(self.screen_w - 380, mouse_x - 50)))
-            dist_to_mouse = abs(current_x - target)
+            # Position cat slightly offset from cursor so it doesn't cover click targets
+            target_x = float(max(20, min(self.screen_w - 300, mouse_x + 35)))
+            target_y = float(max(40, min(self.screen_h - 220, mouse_y - 40)))
 
-            if dist_to_mouse > 80:  # Need to walk towards cursor
-                self.target_x = target
+            dx = target_x - current_x
+            dy = target_y - current_y
+            dist = math.hypot(dx, dy)
+
+            if dist > 85:  # Cursor moved away -> start following in 2D
+                self.target_x = target_x
+                self.target_y = target_y
                 if self.current_state != CatState.FOLLOWING:
                     self.current_state = CatState.FOLLOWING
                     return self.current_state, True
-            elif dist_to_mouse <= 80 and self.current_state == CatState.FOLLOWING:
-                # Reached near cursor -> sit and watch
+            elif dist <= 85 and self.current_state == CatState.FOLLOWING:
+                # Reached near cursor -> sit down and watch
                 self.current_state = CatState.RESTING
-                self.state_time_remaining = random.uniform(10.0, 20.0)
+                self.state_time_remaining = random.uniform(8.0, 16.0)
                 return self.current_state, True
 
-        # Autonomous pacing when mouse is idle
+        # Autonomous roaming when mouse is still
         self.state_time_remaining -= dt
         if self.state_time_remaining <= 0:
             if self.current_state == CatState.RESTING:
                 self.current_state = CatState.FOLLOWING
-                self.state_time_remaining = random.uniform(6.0, 12.0)
-                self.target_x = float(random.randint(80, max(120, self.screen_w - 420)))
+                self.state_time_remaining = random.uniform(6.0, 10.0)
+                self.target_x = float(random.randint(80, max(120, self.screen_w - 360)))
+                self.target_y = float(random.randint(60, max(100, self.screen_h - 240)))
                 return self.current_state, True
             else:
                 self.current_state = CatState.RESTING
-                self.state_time_remaining = random.uniform(15.0, 30.0)
+                self.state_time_remaining = random.uniform(12.0, 24.0)
                 return self.current_state, True
 
         return self.current_state, False
@@ -228,7 +234,7 @@ class DesktopCatWindow(Gtk.Window):
         self.screen_w = geom.width
         self.screen_h = geom.height
 
-        self.brain = AutonomousCatBrain(self.screen_w)
+        self.brain = AutonomousCatBrain(self.screen_w, self.screen_h)
         self.kb_detector = X11KeyboardDetector()
 
         # Layout
@@ -247,12 +253,12 @@ class DesktopCatWindow(Gtk.Window):
         self.image_widget = Gtk.Image()
         self.vbox.pack_start(self.image_widget, True, True, 0)
 
-        # Position along the dock
-        self.pos_x = float(self.screen_w - 400)
-        self.pos_y = float(self.screen_h - 220)
+        # Initial Position
+        self.pos_x = float(self.screen_w - 380)
+        self.pos_y = float(self.screen_h - 240)
         self.move(int(self.pos_x), int(self.pos_y))
 
-        self.speed = 3.2  # Responsive walk speed
+        self.speed = 4.0  # Smooth 2D gliding speed
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
@@ -277,7 +283,7 @@ class DesktopCatWindow(Gtk.Window):
         # 30 FPS Main Loop
         GLib.timeout_add(33, self._on_frame_tick)
         GLib.timeout_add_seconds(45, self._on_thought_tick)
-        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... tracking mouse & typing! 🐾", 5))
+        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... 2D full screen tracking active! 🐾", 5))
 
     def _load_cat_anim(self, cat_key: str):
         fname = CONFIRMED_CATS.get(cat_key, "golden-chinchilla.gif")
@@ -288,7 +294,6 @@ class DesktopCatWindow(Gtk.Window):
             self.resize(anim.get_width() + 20, anim.get_height() + 50)
 
     def _load_random_gallery_cat(self):
-        """Loads a random cat from the 100+ Cat Gallery."""
         if os.path.exists(CATS_GALLERY_DIR):
             files = [f for f in os.listdir(CATS_GALLERY_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))]
             if files:
@@ -305,7 +310,7 @@ class DesktopCatWindow(Gtk.Window):
         dt = 0.033
         now = time.time()
 
-        # 1. Query Mouse Position
+        # 1. Query Mouse Position (Both X and Y)
         try:
             _, mouse_x, mouse_y = self.pointer_device.get_position()
         except Exception:
@@ -317,27 +322,37 @@ class DesktopCatWindow(Gtk.Window):
             self.last_cheer_time = now
             self.show_bubble(random.choice(TYPING_CHEERS), 3)
 
-        # 3. Brain Tick
-        state, changed = self.brain.tick(dt, self.pos_x, mouse_x, is_typing)
+        # 3. Brain Tick (Full 2D)
+        state, changed = self.brain.tick(dt, self.pos_x, self.pos_y, mouse_x, mouse_y, is_typing)
 
         if changed and not self.dragging:
             if state == CatState.FOLLOWING:
-                self._load_cat_anim("fluffy")  # Real standing fluffy cat when walking towards mouse
+                self._load_cat_anim("fluffy")  # Standing fluffy cat when moving
             elif state == CatState.TYPING_CHEER:
                 self._load_cat_anim("bengal")  # Active alert Bengal cat when coding
             else:
                 self._load_cat_anim("golden")  # Resting golden cat on mat
 
-        # 4. Smooth Responsive Movement towards target
+        # 4. Smooth 2D Vector Movement towards target (X & Y)
         if state == CatState.FOLLOWING and not self.dragging:
-            dist = self.brain.target_x - self.pos_x
-            if abs(dist) <= self.speed:
+            dx = self.brain.target_x - self.pos_x
+            dy = self.brain.target_y - self.pos_y
+            dist = math.hypot(dx, dy)
+
+            if dist <= self.speed:
                 self.pos_x = self.brain.target_x
+                self.pos_y = self.brain.target_y
             else:
-                self.pos_x += self.speed if dist > 0 else -self.speed
-                min_x = 60.0
-                max_x = float(self.screen_w - 380)
+                self.pos_x += (dx / dist) * self.speed
+                self.pos_y += (dy / dist) * self.speed
+
+                min_x = 20.0
+                max_x = float(self.screen_w - 300)
+                min_y = 30.0
+                max_y = float(self.screen_h - 220)
+
                 self.pos_x = max(min_x, min(max_x, self.pos_x))
+                self.pos_y = max(min_y, min(max_y, self.pos_y))
                 self.move(int(self.pos_x), int(self.pos_y))
 
         self.queue_draw()
@@ -399,11 +414,11 @@ class DesktopCatWindow(Gtk.Window):
     def _show_context_menu(self, event):
         menu = Gtk.Menu()
 
-        follow_item = Gtk.CheckMenuItem(label="Follow Mouse Cursor 🖱️🐾")
+        follow_item = Gtk.CheckMenuItem(label="Full 2D Mouse Cursor Following 🖱️🐾")
         follow_item.set_active(self.brain.follow_mouse)
         def toggle_follow(w):
             self.brain.follow_mouse = w.get_active()
-            msg = "Following mouse! 🐾" if self.brain.follow_mouse else "Staying on mat! 💤"
+            msg = "Following mouse everywhere in 2D! 🐾" if self.brain.follow_mouse else "Staying in place! 💤"
             self.show_bubble(msg, 3)
         follow_item.connect("toggled", toggle_follow)
         menu.append(follow_item)
