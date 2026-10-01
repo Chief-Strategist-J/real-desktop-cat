@@ -1,20 +1,19 @@
 # Real Desktop Cat 🐱🐾
 
-An autonomous, photorealistic desktop cat companion for Linux (GNOME / X11 / Wayland).
+An autonomous, photorealistic desktop cat companion for Linux (Ubuntu / GNOME / X11).
 
-![Desktop Cat](assets/golden-chinchilla.gif)
+![Desktop Cat Screenshot](screenshot.png)
 
 ## ✨ Features
 
-- **Photorealistic Animations:** Real, high-definition cat animations (resting on mat, grooming, standing, observing, and lounging).
-- **100% Autonomous:** Automatically cycles between resting, roaming, and grooming across your screen and dock without requiring manual clicks.
-- **Smart Mouse Cursor Following:** Senses where your cursor is working on screen and smoothly walks over to keep you company.
-- **True Transparency:** Per-pixel RGBA transparency floating above desktop windows and taskbars.
-- **Single-Instance Mutex:** Built-in kernel file locking to guarantee only one companion runs at a time.
-- **Interactive:**
-  - Double-click to pet with purrs and hearts.
-  - Left-click drag to reposition anywhere.
-  - Right-click menu to feed tuna, toggle mouse following, or switch cat breeds.
+- 🐱 **100% Photorealistic Real Cats:** High-definition real cat animations with true per-pixel RGBA transparency.
+- 🖱️ **Real-Time Mouse Cursor Tracking:** Senses your mouse movements and actively walks across your dock/screen to stay near where you are working.
+- ⌨️ **Keyboard Typing & Coding Reactions:** Detects active keyboard typing in real time and cheers you on with cute focus animations and encouragement.
+- 📸 **100+ Real Cat Gallery:** Includes a built-in library of over 100+ real cat photos and animations.
+- 🤖 **100% Autonomous:** Automatically cycles between resting on its mat, roaming, alert observing, and grooming.
+- 🔒 **Single-Instance Mutex:** Uses kernel file locking (`fcntl.flock`) to guarantee duplicate instances never collide.
+
+---
 
 ## 🚀 Installation & Running
 
@@ -26,16 +25,32 @@ sudo apt install -y python3-gi python3-cairo gir1.2-gtk-3.0
 
 ### Run
 ```bash
-python3 cat_app.py
+python3 cat_app.py &
 ```
 
-## 🐱 Available Real Cat Breeds
-- Golden Tabby Cat (Resting on Mat)
-- Fluffy Longhair Cat
-- Ragdoll Cat
-- Tuxedo Mustache Cat
-- Bengal Leopard Cat
-- Exotic Shorthair Cat
+---
+
+## 🎮 Controls & Interactions
+
+- **Left-Click & Drag:** Move the cat anywhere along your dock or windows.
+- **Double-Click:** Pet the cat to trigger happy purrs and heart reactions.
+- **Right-Click Menu:**
+  - 🖱️ **Toggle Mouse Following:** Turn real-time cursor tracking on/off.
+  - 📸 **Random 100+ Cat Gallery:** Cycle through 100+ real cats.
+  - 🐟 **Feed Tuna Fish:** Give your cat a treat.
+  - 🐱 **Choose Real Cat Breed:** Switch between *Golden Tabby, Fluffy Longhair, Ragdoll, Tuxedo, Bengal, or Exotic Shorthair*.
+  - ❌ **Close Cat:** Exit cleanly.
+
+---
+
+## 🏗️ Clean Code Architecture
+
+- **`SingleInstanceGuard`:** File locking mutex to ensure single-process execution.
+- **`X11KeyboardDetector`:** Real-time low-level X11 keymap query via `ctypes` (zero root/sudo required).
+- **`AutonomousCatBrain`:** Probabilistic state machine handling pacing, mouse following distance thresholds, and typing cheer triggers.
+- **`DesktopCatWindow`:** GTK3 + Cairo composited transparent window running on a 30 FPS non-blocking GLib event loop.
+
+---
 
 ## 📄 License
 MIT License

@@ -2,10 +2,15 @@
 """
 Autonomous Photorealistic Desktop Cat Companion
 ===============================================
-A clean, modular desktop companion featuring real photorealistic cats
-with autonomous roaming and smart mouse-cursor following.
+Features:
+- Real-time Mouse Cursor Tracking & Following
+- Active Keyboard Typing Detection with Cute Reactions
+- 100+ Real Cat Library Gallery
+- Photorealistic Transparency (GNOME / X11)
+- Clean OOP Modular Architecture & Single-Instance Lock
 """
 
+import ctypes
 from enum import Enum, auto
 import fcntl
 import json
@@ -24,10 +29,11 @@ from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 import cairo
 
 # ---------------------------------------------------------------------------
-# Assets & Configuration Paths
+# Constants & Paths
 # ---------------------------------------------------------------------------
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ASSETS_DIR = os.path.join(SCRIPT_DIR, 'assets')
+CATS_GALLERY_DIR = os.path.join(ASSETS_DIR, 'cats')
 LOCK_FILE_PATH = '/tmp/desktop_cat_instance.lock'
 
 CONFIRMED_CATS = {
@@ -40,7 +46,7 @@ CONFIRMED_CATS = {
 }
 
 CAT_THOUGHTS = [
-    "Purrrrr... following your cursor! 🐾",
+    "Purrrrr... keeping you company! 🐾",
     "Remember to stay hydrated! 💧",
     "Deep focus mode activated! 💻✨",
     "Stretch your shoulders for 5s! 🧘",
@@ -51,6 +57,58 @@ CAT_THOUGHTS = [
     "Following you along your dock! 🐾"
 ]
 
+TYPING_CHEERS = [
+    "🔥 Typing frenzy! You're in the zone!",
+    "💻 Speed coder at work! *paw cheers*",
+    "⚡ Furious typing detected! Keep rocking!",
+    "🐾 *tap tap tap* Bongo paws in sync!",
+    "✨ 100x engineer speed unlocked!",
+    "🚀 Rapid keystrokes! Let's ship it!"
+]
+
+
+# ---------------------------------------------------------------------------
+# X11 Keyboard Activity Detector (Pure Ctypes, Zero sudo required)
+# ---------------------------------------------------------------------------
+class X11KeyboardDetector:
+    """Detects global keyboard typing activity across any window in X11."""
+    def __init__(self):
+        self.available = False
+        try:
+            self.x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
+            self.display = self.x11.XOpenDisplay(None)
+            if self.display:
+                self.available = True
+                self.prev_keys = (ctypes.c_char * 32)()
+                self.x11.XQueryKeymap(self.display, self.prev_keys)
+        except Exception:
+            self.available = False
+
+    def is_typing(self) -> bool:
+        if not self.available:
+            return False
+        current_keys = (ctypes.c_char * 32)()
+        self.x11.XQueryKeymap(self.display, current_keys)
+        
+        # Check if any key is currently pressed
+        pressed = False
+        for b in bytes(current_keys):
+            if b != 0:
+                pressed = True
+                break
+        return pressed
+
+    def close(self):
+        if self.available and self.display:
+            try:
+                self.x11.XCloseDisplay(self.display)
+            except Exception:
+                pass
+
+
+# ---------------------------------------------------------------------------
+# Single-Instance Guard
+# ---------------------------------------------------------------------------
 class SingleInstanceGuard:
     def __init__(self, lock_path: str):
         self.lock_path = lock_path
@@ -77,10 +135,14 @@ class SingleInstanceGuard:
                 pass
 
 
+# ---------------------------------------------------------------------------
+# State & Autonomous Behavior
+# ---------------------------------------------------------------------------
 class CatState(Enum):
     RESTING = auto()   # Lying down / resting on mat
-    ROAMING = auto()   # Walking / following cursor across dock
-    ALERT = auto()     # Sitting alert near cursor
+    FOLLOWING = auto() # Actively walking & tracking mouse cursor
+    TYPING_CHEER = auto() # Cheering furiously when typing is detected
+    ALERT = auto()     # Sitting alert
 
 
 class AutonomousCatBrain:
@@ -88,46 +150,60 @@ class AutonomousCatBrain:
         self.screen_w = screen_w
         self.current_state = CatState.RESTING
         self.state_time_remaining = 6.0
-        self.follow_mouse = True  # Automatically follow cursor
+        self.follow_mouse = True
         self.target_x = 0.0
+        self.last_typing_time = 0.0
 
-    def tick(self, dt: float, current_x: float, mouse_x: int) -> tuple[CatState, bool]:
-        self.state_time_remaining -= dt
+    def tick(self, dt: float, current_x: float, mouse_x: int, is_typing: bool) -> tuple[CatState, bool]:
+        now = time.time()
 
-        # Smart Cursor Following
-        if self.follow_mouse:
-            dist_to_mouse = abs(current_x - (mouse_x - 60))
-            if dist_to_mouse > 140:
-                if self.current_state != CatState.ROAMING:
-                    self.current_state = CatState.ROAMING
-                    self.target_x = float(max(60, min(self.screen_w - 380, mouse_x - 60)))
-                    return self.current_state, True
-                else:
-                    self.target_x = float(max(60, min(self.screen_w - 380, mouse_x - 60)))
-            elif dist_to_mouse <= 140 and self.current_state == CatState.ROAMING:
-                self.current_state = CatState.RESTING
-                self.state_time_remaining = 15.0
+        # Handle Keyboard Typing Detection
+        if is_typing:
+            self.last_typing_time = now
+            if self.current_state != CatState.TYPING_CHEER:
+                self.current_state = CatState.TYPING_CHEER
+                self.state_time_remaining = 3.0
                 return self.current_state, True
 
+        # If typing cheered recently, keep cheering for a couple seconds
+        if now - self.last_typing_time < 2.5:
+            return self.current_state, False
+
+        # Real-time Mouse Cursor Following
+        if self.follow_mouse:
+            target = float(max(60, min(self.screen_w - 380, mouse_x - 50)))
+            dist_to_mouse = abs(current_x - target)
+
+            if dist_to_mouse > 80:  # Need to walk towards cursor
+                self.target_x = target
+                if self.current_state != CatState.FOLLOWING:
+                    self.current_state = CatState.FOLLOWING
+                    return self.current_state, True
+            elif dist_to_mouse <= 80 and self.current_state == CatState.FOLLOWING:
+                # Reached near cursor -> sit and watch
+                self.current_state = CatState.RESTING
+                self.state_time_remaining = random.uniform(10.0, 20.0)
+                return self.current_state, True
+
+        # Autonomous pacing when mouse is idle
+        self.state_time_remaining -= dt
         if self.state_time_remaining <= 0:
-            self._cycle_state(current_x)
-            return self.current_state, True
+            if self.current_state == CatState.RESTING:
+                self.current_state = CatState.FOLLOWING
+                self.state_time_remaining = random.uniform(6.0, 12.0)
+                self.target_x = float(random.randint(80, max(120, self.screen_w - 420)))
+                return self.current_state, True
+            else:
+                self.current_state = CatState.RESTING
+                self.state_time_remaining = random.uniform(15.0, 30.0)
+                return self.current_state, True
 
         return self.current_state, False
 
-    def _cycle_state(self, current_x: float):
-        if self.current_state == CatState.RESTING:
-            self.current_state = CatState.ROAMING
-            self.state_time_remaining = random.uniform(6.0, 12.0)
-            self.target_x = float(random.randint(80, max(120, self.screen_w - 420)))
-        elif self.current_state == CatState.ROAMING:
-            self.current_state = CatState.ALERT
-            self.state_time_remaining = random.uniform(8.0, 14.0)
-        else:
-            self.current_state = CatState.RESTING
-            self.state_time_remaining = random.uniform(15.0, 30.0)
 
-
+# ---------------------------------------------------------------------------
+# Desktop Cat Window & Controller
+# ---------------------------------------------------------------------------
 class DesktopCatWindow(Gtk.Window):
     def __init__(self):
         super().__init__(type=Gtk.WindowType.TOPLEVEL)
@@ -135,7 +211,7 @@ class DesktopCatWindow(Gtk.Window):
         self.set_title("Real Desktop Cat")
         self.set_decorated(False)
         self.set_keep_above(True)
-        self.stick()
+        self.stick()  # Visible on all workspaces
         self.set_skip_taskbar_hint(True)
         self.set_skip_pager_hint(True)
         self.set_app_paintable(True)
@@ -153,11 +229,13 @@ class DesktopCatWindow(Gtk.Window):
         self.screen_h = geom.height
 
         self.brain = AutonomousCatBrain(self.screen_w)
+        self.kb_detector = X11KeyboardDetector()
 
+        # Layout
         self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.add(self.vbox)
 
-        # Thought Bubble
+        # Thought / Cheer Bubble
         self.bubble_box = Gtk.EventBox()
         self.bubble_label = Gtk.Label()
         self.bubble_box.add(self.bubble_label)
@@ -174,19 +252,21 @@ class DesktopCatWindow(Gtk.Window):
         self.pos_y = float(self.screen_h - 220)
         self.move(int(self.pos_x), int(self.pos_y))
 
-        self.speed = 2.2
+        self.speed = 3.2  # Responsive walk speed
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.last_click_time = 0
+        self.last_cheer_time = 0
 
         self._load_cat_anim("golden")
 
+        # Events
         self.connect('draw', self._on_draw)
         self.connect('button-press-event', self._on_button_press)
         self.connect('button-release-event', self._on_button_release)
         self.connect('motion-notify-event', self._on_motion_notify)
-        self.connect('destroy', Gtk.main_quit)
+        self.connect('destroy', self._on_destroy)
 
         self.add_events(
             Gdk.EventMask.BUTTON_PRESS_MASK
@@ -194,9 +274,10 @@ class DesktopCatWindow(Gtk.Window):
             | Gdk.EventMask.POINTER_MOTION_MASK
         )
 
+        # 30 FPS Main Loop
         GLib.timeout_add(33, self._on_frame_tick)
-        GLib.timeout_add_seconds(40, self._on_thought_tick)
-        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... following your cursor! 🐾", 5))
+        GLib.timeout_add_seconds(45, self._on_thought_tick)
+        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... tracking mouse & typing! 🐾", 5))
 
     def _load_cat_anim(self, cat_key: str):
         fname = CONFIRMED_CATS.get(cat_key, "golden-chinchilla.gif")
@@ -206,36 +287,56 @@ class DesktopCatWindow(Gtk.Window):
             self.image_widget.set_from_animation(anim)
             self.resize(anim.get_width() + 20, anim.get_height() + 50)
 
+    def _load_random_gallery_cat(self):
+        """Loads a random cat from the 100+ Cat Gallery."""
+        if os.path.exists(CATS_GALLERY_DIR):
+            files = [f for f in os.listdir(CATS_GALLERY_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))]
+            if files:
+                choice = random.choice(files)
+                full_path = os.path.join(CATS_GALLERY_DIR, choice)
+                try:
+                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(full_path, 220, 160, True)
+                    self.image_widget.set_from_pixbuf(pb)
+                    self.show_bubble(f"📸 Gallery Cat: {choice}", 3)
+                except Exception:
+                    pass
+
     def _on_frame_tick(self) -> bool:
         dt = 0.033
-        
+        now = time.time()
+
+        # 1. Query Mouse Position
         try:
             _, mouse_x, mouse_y = self.pointer_device.get_position()
         except Exception:
             mouse_x, mouse_y = int(self.pos_x), int(self.pos_y)
 
-        state, changed = self.brain.tick(dt, self.pos_x, mouse_x)
+        # 2. Query Keyboard Typing Activity
+        is_typing = self.kb_detector.is_typing()
+        if is_typing and (now - self.last_cheer_time > 8.0):
+            self.last_cheer_time = now
+            self.show_bubble(random.choice(TYPING_CHEERS), 3)
+
+        # 3. Brain Tick
+        state, changed = self.brain.tick(dt, self.pos_x, mouse_x, is_typing)
 
         if changed and not self.dragging:
-            if state == CatState.ROAMING:
-                self._load_cat_anim("fluffy")  # Walking fluffy cat when roaming/following
-            elif state == CatState.ALERT:
-                self._load_cat_anim("ragdoll") # Sitting ragdoll cat
+            if state == CatState.FOLLOWING:
+                self._load_cat_anim("fluffy")  # Real standing fluffy cat when walking towards mouse
+            elif state == CatState.TYPING_CHEER:
+                self._load_cat_anim("bengal")  # Active alert Bengal cat when coding
             else:
-                self._load_cat_anim("golden")  # Resting golden cat
+                self._load_cat_anim("golden")  # Resting golden cat on mat
 
-        if state == CatState.ROAMING and not self.dragging:
-            step = self.speed
-            min_x = 60.0
-            max_x = float(self.screen_w - 400)
-
-            if abs(self.pos_x - self.brain.target_x) <= step:
+        # 4. Smooth Responsive Movement towards target
+        if state == CatState.FOLLOWING and not self.dragging:
+            dist = self.brain.target_x - self.pos_x
+            if abs(dist) <= self.speed:
                 self.pos_x = self.brain.target_x
-                self.brain.current_state = CatState.RESTING
-                self.brain.state_time_remaining = random.uniform(10.0, 20.0)
-                self._load_cat_anim("golden")
             else:
-                self.pos_x += step if self.brain.target_x > self.pos_x else -step
+                self.pos_x += self.speed if dist > 0 else -self.speed
+                min_x = 60.0
+                max_x = float(self.screen_w - 380)
                 self.pos_x = max(min_x, min(max_x, self.pos_x))
                 self.move(int(self.pos_x), int(self.pos_y))
 
@@ -243,8 +344,8 @@ class DesktopCatWindow(Gtk.Window):
         return True
 
     def _on_thought_tick(self) -> bool:
-        if not self.dragging:
-            self.show_bubble(random.choice(CAT_THOUGHTS), 5)
+        if not self.dragging and self.brain.current_state == CatState.RESTING:
+            self.show_bubble(random.choice(CAT_THOUGHTS), 4)
         return True
 
     def show_bubble(self, text: str, duration: int = 4):
@@ -302,10 +403,14 @@ class DesktopCatWindow(Gtk.Window):
         follow_item.set_active(self.brain.follow_mouse)
         def toggle_follow(w):
             self.brain.follow_mouse = w.get_active()
-            msg = "Following your mouse! 🐾" if self.brain.follow_mouse else "Staying in place! 💤"
+            msg = "Following mouse! 🐾" if self.brain.follow_mouse else "Staying on mat! 💤"
             self.show_bubble(msg, 3)
         follow_item.connect("toggled", toggle_follow)
         menu.append(follow_item)
+
+        gallery_item = Gtk.MenuItem(label="Random 100+ Cat Gallery 📸")
+        gallery_item.connect("activate", lambda w: self._load_random_gallery_cat())
+        menu.append(gallery_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -356,6 +461,10 @@ class DesktopCatWindow(Gtk.Window):
 
         menu.show_all()
         menu.popup_at_pointer(event)
+
+    def _on_destroy(self, widget):
+        self.kb_detector.close()
+        Gtk.main_quit()
 
 
 def main():
