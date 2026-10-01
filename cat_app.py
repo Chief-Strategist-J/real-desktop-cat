@@ -270,14 +270,26 @@ class DesktopCatWindow(Gtk.Window):
         self.pos_y = float(self.screen_h - 240)
         self.move(int(self.pos_x), int(self.pos_y))
 
-        self.speed = 1.5  # Gentle, calm walking pace (smooth 2D strolling)
+        self.speed = 0.75  # Ultra gentle, slow & relaxed walking pace
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
         self.last_click_time = 0
         self.last_cheer_time = 0
 
-        self._load_cat_anim("golden")
+        # 115+ Cat Gallery Integration
+        self.gallery_files = []
+        if os.path.exists(CATS_GALLERY_DIR):
+            self.gallery_files = sorted([
+                f for f in os.listdir(CATS_GALLERY_DIR)
+                if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))
+            ])
+        self.gallery_index = random.randint(0, max(0, len(self.gallery_files) - 1)) if self.gallery_files else 0
+        self.auto_cycle_gallery = True
+        self.active_custom_cat = False
+
+        # Initial Cat Display
+        self._show_gallery_cat(self.gallery_index, notify=False)
 
         # Events
         self.connect('draw', self._on_draw)
@@ -292,10 +304,43 @@ class DesktopCatWindow(Gtk.Window):
             | Gdk.EventMask.POINTER_MOTION_MASK
         )
 
-        # 30 FPS Main Loop
+        # Timers
         GLib.timeout_add(33, self._on_frame_tick)
-        GLib.timeout_add_seconds(45, self._on_thought_tick)
-        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... gentle 2D tracking active! 🐾", 5))
+        GLib.timeout_add_seconds(40, self._on_thought_tick)
+        GLib.timeout_add_seconds(18, self._on_gallery_cycle_tick)  # Auto-cycle photos every 18s
+        GLib.timeout_add_seconds(1, lambda: self.show_bubble(f"Purrrrr... 115+ Cat Gallery & Gentle 2D Tracking active! 🐾", 5))
+
+    def _show_gallery_cat(self, index: int, notify: bool = True):
+        if not self.gallery_files:
+            self._load_cat_anim("golden")
+            return
+
+        self.gallery_index = index % len(self.gallery_files)
+        fname = self.gallery_files[self.gallery_index]
+        full_path = os.path.join(CATS_GALLERY_DIR, fname)
+
+        try:
+            if fname.lower().endswith('.gif'):
+                anim = GdkPixbuf.PixbufAnimation.new_from_file(full_path)
+                self.image_widget.set_from_animation(anim)
+                self.resize(max(200, anim.get_width() + 20), max(160, anim.get_height() + 50))
+            else:
+                pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(full_path, 220, 165, True)
+                self.image_widget.set_from_pixbuf(pb)
+                self.resize(240, 200)
+
+            if notify:
+                num = self.gallery_index + 1
+                total = len(self.gallery_files)
+                self.show_bubble(f"📸 Cat Photo #{num}/{total} ✨", 3)
+        except Exception:
+            self._load_cat_anim("golden")
+
+    def _next_gallery_cat(self):
+        self._show_gallery_cat(self.gallery_index + 1, notify=True)
+
+    def _prev_gallery_cat(self):
+        self._show_gallery_cat(self.gallery_index - 1, notify=True)
 
     def _load_cat_anim(self, cat_key: str):
         fname = CONFIRMED_CATS.get(cat_key, "golden-chinchilla.gif")
@@ -305,18 +350,10 @@ class DesktopCatWindow(Gtk.Window):
             self.image_widget.set_from_animation(anim)
             self.resize(anim.get_width() + 20, anim.get_height() + 50)
 
-    def _load_random_gallery_cat(self):
-        if os.path.exists(CATS_GALLERY_DIR):
-            files = [f for f in os.listdir(CATS_GALLERY_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg', '.gif'))]
-            if files:
-                choice = random.choice(files)
-                full_path = os.path.join(CATS_GALLERY_DIR, choice)
-                try:
-                    pb = GdkPixbuf.Pixbuf.new_from_file_at_scale(full_path, 220, 160, True)
-                    self.image_widget.set_from_pixbuf(pb)
-                    self.show_bubble(f"📸 Gallery Cat: {choice}", 3)
-                except Exception:
-                    pass
+    def _on_gallery_cycle_tick(self) -> bool:
+        if self.auto_cycle_gallery and not self.dragging and self.brain.current_state == CatState.RESTING:
+            self._next_gallery_cat()
+        return True
 
     def _on_frame_tick(self) -> bool:
         dt = 0.033
@@ -339,20 +376,21 @@ class DesktopCatWindow(Gtk.Window):
 
         if changed and not self.dragging:
             if state == CatState.FOLLOWING:
-                self._load_cat_anim("fluffy")  # Standing fluffy cat when moving
+                self._load_cat_anim("fluffy")  # Walking/standing fluffy cat when moving
             elif state == CatState.TYPING_CHEER:
-                self._load_cat_anim("bengal")  # Active alert Bengal cat when coding
+                self._load_cat_anim("bengal")  # Alert Bengal cat when coding
             else:
-                self._load_cat_anim("golden")  # Resting golden cat on mat
+                # Show current gallery photo / resting cat
+                self._show_gallery_cat(self.gallery_index, notify=False)
 
-        # 4. Gentle & Smooth 2D Vector Movement towards target with easing
+        # 4. Ultra Gentle & Slow 2D Vector Movement with deceleration easing
         if state == CatState.FOLLOWING and not self.dragging:
             dx = self.brain.target_x - self.pos_x
             dy = self.brain.target_y - self.pos_y
             dist = math.hypot(dx, dy)
 
-            # Smooth deceleration easing when getting close
-            step = min(self.speed, max(0.4, dist * 0.015))
+            # Very smooth and slow easing
+            step = min(self.speed, max(0.2, dist * 0.007))
 
             if dist <= step:
                 self.pos_x = self.brain.target_x
@@ -379,7 +417,8 @@ class DesktopCatWindow(Gtk.Window):
         return True
 
     def show_bubble(self, text: str, duration: int = 4):
-        styled = f"<span background='#11111bcc' foreground='#f5e0dc' weight='bold' size='medium'>  {text}  </span>"
+        escaped = GLib.markup_escape_text(text)
+        styled = f"<span background='#11111bcc' foreground='#f5e0dc' weight='bold' size='medium'>  {escaped}  </span>"
         self.bubble_label.set_markup(styled)
         self.bubble_box.show_all()
         try:
@@ -400,16 +439,18 @@ class DesktopCatWindow(Gtk.Window):
         now = time.time()
         if event.button == 1:
             if now - self.last_click_time < 0.35:
+                # Double click -> Cycle next cat photo and purr!
+                self._next_gallery_cat()
                 self.brain.current_state = CatState.RESTING
                 self.brain.state_time_remaining = 15.0
-                self._load_cat_anim("golden")
-                self.show_bubble("Purrrrrr... ❤️ (Happy cat purrs!)", 4)
             else:
                 self.dragging = True
                 pos = self.get_position()
                 self.drag_start_x = event.x_root - pos[0]
                 self.drag_start_y = event.y_root - pos[1]
             self.last_click_time = now
+        elif event.button == 2:  # Middle click -> next cat photo
+            self._next_gallery_cat()
         elif event.button == 3:
             self._show_context_menu(event)
 
@@ -442,9 +483,9 @@ class DesktopCatWindow(Gtk.Window):
         speed_menu = Gtk.Menu()
         speed_item.set_submenu(speed_menu)
         speed_levels = [
-            ("🐾 Gentle Stroll (Default - Slow & Cute)", 1.5),
-            ("🍃 Super Slow & Calm Meander", 0.9),
-            ("🚶 Moderate Pace", 2.4),
+            ("🐾 Ultra Gentle Stroll (Default - Slow & Cute)", 0.75),
+            ("🍃 Lazy Sloth Meander (Super Slow)", 0.45),
+            ("🚶 Light Walk", 1.3),
         ]
         for label, spd in speed_levels:
             it = Gtk.MenuItem(label=label)
@@ -452,9 +493,37 @@ class DesktopCatWindow(Gtk.Window):
             speed_menu.append(it)
         menu.append(speed_item)
 
-        gallery_item = Gtk.MenuItem(label="Random 100+ Cat Gallery 📸")
-        gallery_item.connect("activate", lambda w: self._load_random_gallery_cat())
-        menu.append(gallery_item)
+        menu.append(Gtk.SeparatorMenuItem())
+
+        # 115+ Cat Gallery Submenu & Controls
+        gallery_menu_item = Gtk.MenuItem(label="115+ Real Cat Gallery 📸")
+        gallery_sub = Gtk.Menu()
+        gallery_menu_item.set_submenu(gallery_sub)
+
+        next_cat_item = Gtk.MenuItem(label="Next Cat Photo ➡️")
+        next_cat_item.connect("activate", lambda w: self._next_gallery_cat())
+        gallery_sub.append(next_cat_item)
+
+        prev_cat_item = Gtk.MenuItem(label="Previous Cat Photo ⬅️")
+        prev_cat_item.connect("activate", lambda w: self._prev_gallery_cat())
+        gallery_sub.append(prev_cat_item)
+
+        random_cat_item = Gtk.MenuItem(label="Random Cat Photo 🎲")
+        random_cat_item.connect("activate", lambda w: self._show_gallery_cat(random.randint(0, max(0, len(self.gallery_files) - 1))))
+        gallery_sub.append(random_cat_item)
+
+        gallery_sub.append(Gtk.SeparatorMenuItem())
+
+        auto_cycle_item = Gtk.CheckMenuItem(label="Auto-Cycle Photos (Every 18s) ⏱️")
+        auto_cycle_item.set_active(self.auto_cycle_gallery)
+        def toggle_auto_cycle(w):
+            self.auto_cycle_gallery = w.get_active()
+            msg = "Auto photo cycling ON (every 18s) 📸" if self.auto_cycle_gallery else "Auto photo cycling PAUSED ⏸️"
+            self.show_bubble(msg, 3)
+        auto_cycle_item.connect("toggled", toggle_auto_cycle)
+        gallery_sub.append(auto_cycle_item)
+
+        menu.append(gallery_menu_item)
 
         menu.append(Gtk.SeparatorMenuItem())
 
@@ -463,7 +532,7 @@ class DesktopCatWindow(Gtk.Window):
             setattr(self.brain, 'current_state', CatState.RESTING),
             setattr(self.brain, 'state_time_remaining', 15.0),
             self._load_cat_anim("golden"),
-            self.show_bubble("Purrrrr... ❤️", 3)
+            self.show_bubble("Purrrrr... ❤️ (Happy cat purrs!)", 3)
         ))
         menu.append(pet_item)
 
@@ -479,7 +548,7 @@ class DesktopCatWindow(Gtk.Window):
         menu.append(Gtk.SeparatorMenuItem())
 
         # Select favorite cat
-        cats_item = Gtk.MenuItem(label="Choose Real Cat Breed 🐱")
+        cats_item = Gtk.MenuItem(label="Choose Animated Cat Breed 🐱")
         cats_menu = Gtk.Menu()
         cats_item.set_submenu(cats_menu)
 
