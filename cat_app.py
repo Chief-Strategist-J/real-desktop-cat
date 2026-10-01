@@ -178,37 +178,42 @@ class AutonomousCatBrain:
         # Real-time Full 2D (X & Y) Mouse Cursor Tracking
         if self.follow_mouse:
             # Position cat slightly offset from cursor so it doesn't cover click targets
-            target_x = float(max(20, min(self.screen_w - 300, mouse_x + 35)))
-            target_y = float(max(40, min(self.screen_h - 220, mouse_y - 40)))
+            target_x = float(max(20, min(self.screen_w - 300, mouse_x + 40)))
+            target_y = float(max(40, min(self.screen_h - 220, mouse_y - 30)))
 
             dx = target_x - current_x
             dy = target_y - current_y
             dist = math.hypot(dx, dy)
 
-            if dist > 85:  # Cursor moved away -> start following in 2D
+            # Relaxed cat behavior: only get up and follow when mouse is far enough
+            if dist > 140:
                 self.target_x = target_x
                 self.target_y = target_y
                 if self.current_state != CatState.FOLLOWING:
                     self.current_state = CatState.FOLLOWING
                     return self.current_state, True
-            elif dist <= 85 and self.current_state == CatState.FOLLOWING:
-                # Reached near cursor -> sit down and watch
+            elif dist <= 75 and self.current_state == CatState.FOLLOWING:
+                # Reached comfortably near cursor -> sit down and relax
                 self.current_state = CatState.RESTING
-                self.state_time_remaining = random.uniform(8.0, 16.0)
+                self.state_time_remaining = random.uniform(10.0, 20.0)
                 return self.current_state, True
+            elif self.current_state == CatState.FOLLOWING:
+                # Keep tracking target smoothly while walking
+                self.target_x = target_x
+                self.target_y = target_y
 
-        # Autonomous roaming when mouse is still
+        # Autonomous gentle roaming when mouse is still
         self.state_time_remaining -= dt
         if self.state_time_remaining <= 0:
             if self.current_state == CatState.RESTING:
                 self.current_state = CatState.FOLLOWING
-                self.state_time_remaining = random.uniform(6.0, 10.0)
+                self.state_time_remaining = random.uniform(8.0, 14.0)
                 self.target_x = float(random.randint(80, max(120, self.screen_w - 360)))
                 self.target_y = float(random.randint(60, max(100, self.screen_h - 240)))
                 return self.current_state, True
             else:
                 self.current_state = CatState.RESTING
-                self.state_time_remaining = random.uniform(12.0, 24.0)
+                self.state_time_remaining = random.uniform(15.0, 30.0)
                 return self.current_state, True
 
         return self.current_state, False
@@ -265,7 +270,7 @@ class DesktopCatWindow(Gtk.Window):
         self.pos_y = float(self.screen_h - 240)
         self.move(int(self.pos_x), int(self.pos_y))
 
-        self.speed = 4.0  # Smooth 2D gliding speed
+        self.speed = 1.5  # Gentle, calm walking pace (smooth 2D strolling)
         self.dragging = False
         self.drag_start_x = 0
         self.drag_start_y = 0
@@ -290,7 +295,7 @@ class DesktopCatWindow(Gtk.Window):
         # 30 FPS Main Loop
         GLib.timeout_add(33, self._on_frame_tick)
         GLib.timeout_add_seconds(45, self._on_thought_tick)
-        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... 2D full screen tracking active! 🐾", 5))
+        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... gentle 2D tracking active! 🐾", 5))
 
     def _load_cat_anim(self, cat_key: str):
         fname = CONFIRMED_CATS.get(cat_key, "golden-chinchilla.gif")
@@ -340,18 +345,21 @@ class DesktopCatWindow(Gtk.Window):
             else:
                 self._load_cat_anim("golden")  # Resting golden cat on mat
 
-        # 4. Smooth 2D Vector Movement towards target (X & Y)
+        # 4. Gentle & Smooth 2D Vector Movement towards target with easing
         if state == CatState.FOLLOWING and not self.dragging:
             dx = self.brain.target_x - self.pos_x
             dy = self.brain.target_y - self.pos_y
             dist = math.hypot(dx, dy)
 
-            if dist <= self.speed:
+            # Smooth deceleration easing when getting close
+            step = min(self.speed, max(0.4, dist * 0.015))
+
+            if dist <= step:
                 self.pos_x = self.brain.target_x
                 self.pos_y = self.brain.target_y
             else:
-                self.pos_x += (dx / dist) * self.speed
-                self.pos_y += (dy / dist) * self.speed
+                self.pos_x += (dx / dist) * step
+                self.pos_y += (dy / dist) * step
 
                 min_x = 20.0
                 max_x = float(self.screen_w - 300)
@@ -429,6 +437,20 @@ class DesktopCatWindow(Gtk.Window):
             self.show_bubble(msg, 3)
         follow_item.connect("toggled", toggle_follow)
         menu.append(follow_item)
+
+        speed_item = Gtk.MenuItem(label="Walking Pace / Speed 🐾")
+        speed_menu = Gtk.Menu()
+        speed_item.set_submenu(speed_menu)
+        speed_levels = [
+            ("🐾 Gentle Stroll (Default - Slow & Cute)", 1.5),
+            ("🍃 Super Slow & Calm Meander", 0.9),
+            ("🚶 Moderate Pace", 2.4),
+        ]
+        for label, spd in speed_levels:
+            it = Gtk.MenuItem(label=label)
+            it.connect("activate", lambda w, s=spd: (setattr(self, 'speed', s), self.show_bubble(f"Speed set to {s} px/frame 🐾", 3)))
+            speed_menu.append(it)
+        menu.append(speed_item)
 
         gallery_item = Gtk.MenuItem(label="Random 100+ Cat Gallery 📸")
         gallery_item.connect("activate", lambda w: self._load_random_gallery_cat())
