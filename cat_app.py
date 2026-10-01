@@ -1,0 +1,387 @@
+#!/usr/bin/env python3
+"""
+Autonomous Photorealistic Desktop Cat Companion
+===============================================
+A clean, modular desktop companion featuring real photorealistic cats
+with autonomous roaming and smart mouse-cursor following.
+"""
+
+from enum import Enum, auto
+import fcntl
+import json
+import os
+import random
+import signal
+import subprocess
+import sys
+import time
+
+import gi
+gi.require_version('Gtk', '3.0')
+gi.require_version('Gdk', '3.0')
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
+import cairo
+
+# ---------------------------------------------------------------------------
+# Assets & Configuration Paths
+# ---------------------------------------------------------------------------
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+ASSETS_DIR = os.path.join(SCRIPT_DIR, 'assets')
+LOCK_FILE_PATH = '/tmp/desktop_cat_instance.lock'
+
+CONFIRMED_CATS = {
+    "golden": "golden-chinchilla.gif",  # Real golden cat resting on mat
+    "fluffy": "finn.gif",               # Real fluffy longhair cat standing
+    "ragdoll": "ragdoll.gif",           # Real fluffy ragdoll cat
+    "tuxedo": "mustache-cat.gif",       # Real tuxedo cat
+    "bengal": "bengal.gif",             # Real Bengal cat
+    "exotic": "garfield.gif"            # Real exotic shorthair cat
+}
+
+CAT_THOUGHTS = [
+    "Purrrrr... following your cursor! 🐾",
+    "Remember to stay hydrated! 💧",
+    "Deep focus mode activated! 💻✨",
+    "Stretch your shoulders for 5s! 🧘",
+    "You're doing great today! 🌟",
+    "Watching you code... very impressive! ⌨️",
+    "Rest your eyes: look 20 feet away for 20s! 🌿",
+    "*content cat purrs* ❤️",
+    "Following you along your dock! 🐾"
+]
+
+class SingleInstanceGuard:
+    def __init__(self, lock_path: str):
+        self.lock_path = lock_path
+        self.lock_file = None
+
+    def acquire(self) -> bool:
+        try:
+            self.lock_file = open(self.lock_path, 'w')
+            fcntl.flock(self.lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.lock_file.write(str(os.getpid()))
+            self.lock_file.flush()
+            return True
+        except (IOError, OSError):
+            return False
+
+    def release(self):
+        if self.lock_file:
+            try:
+                fcntl.flock(self.lock_file, fcntl.LOCK_UN)
+                self.lock_file.close()
+                if os.path.exists(self.lock_path):
+                    os.remove(self.lock_path)
+            except Exception:
+                pass
+
+
+class CatState(Enum):
+    RESTING = auto()   # Lying down / resting on mat
+    ROAMING = auto()   # Walking / following cursor across dock
+    ALERT = auto()     # Sitting alert near cursor
+
+
+class AutonomousCatBrain:
+    def __init__(self, screen_w: int):
+        self.screen_w = screen_w
+        self.current_state = CatState.RESTING
+        self.state_time_remaining = 6.0
+        self.follow_mouse = True  # Automatically follow cursor
+        self.target_x = 0.0
+
+    def tick(self, dt: float, current_x: float, mouse_x: int) -> tuple[CatState, bool]:
+        self.state_time_remaining -= dt
+
+        # Smart Cursor Following
+        if self.follow_mouse:
+            dist_to_mouse = abs(current_x - (mouse_x - 60))
+            if dist_to_mouse > 140:
+                if self.current_state != CatState.ROAMING:
+                    self.current_state = CatState.ROAMING
+                    self.target_x = float(max(60, min(self.screen_w - 380, mouse_x - 60)))
+                    return self.current_state, True
+                else:
+                    self.target_x = float(max(60, min(self.screen_w - 380, mouse_x - 60)))
+            elif dist_to_mouse <= 140 and self.current_state == CatState.ROAMING:
+                self.current_state = CatState.RESTING
+                self.state_time_remaining = 15.0
+                return self.current_state, True
+
+        if self.state_time_remaining <= 0:
+            self._cycle_state(current_x)
+            return self.current_state, True
+
+        return self.current_state, False
+
+    def _cycle_state(self, current_x: float):
+        if self.current_state == CatState.RESTING:
+            self.current_state = CatState.ROAMING
+            self.state_time_remaining = random.uniform(6.0, 12.0)
+            self.target_x = float(random.randint(80, max(120, self.screen_w - 420)))
+        elif self.current_state == CatState.ROAMING:
+            self.current_state = CatState.ALERT
+            self.state_time_remaining = random.uniform(8.0, 14.0)
+        else:
+            self.current_state = CatState.RESTING
+            self.state_time_remaining = random.uniform(15.0, 30.0)
+
+
+class DesktopCatWindow(Gtk.Window):
+    def __init__(self):
+        super().__init__(type=Gtk.WindowType.TOPLEVEL)
+
+        self.set_title("Real Desktop Cat")
+        self.set_decorated(False)
+        self.set_keep_above(True)
+        self.stick()
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_app_paintable(True)
+
+        screen = self.get_screen()
+        visual = screen.get_rgba_visual()
+        if visual and screen.is_composited():
+            self.set_visual(visual)
+
+        display = Gdk.Display.get_default()
+        self.pointer_device = display.get_default_seat().get_pointer()
+        monitor = display.get_primary_monitor() or display.get_monitor(0)
+        geom = monitor.get_geometry()
+        self.screen_w = geom.width
+        self.screen_h = geom.height
+
+        self.brain = AutonomousCatBrain(self.screen_w)
+
+        self.vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.add(self.vbox)
+
+        # Thought Bubble
+        self.bubble_box = Gtk.EventBox()
+        self.bubble_label = Gtk.Label()
+        self.bubble_box.add(self.bubble_label)
+        self.bubble_box.set_halign(Gtk.Align.CENTER)
+        self.vbox.pack_start(self.bubble_box, False, False, 0)
+        self.bubble_box.hide()
+
+        # Real Cat Image Widget
+        self.image_widget = Gtk.Image()
+        self.vbox.pack_start(self.image_widget, True, True, 0)
+
+        # Position along the dock
+        self.pos_x = float(self.screen_w - 400)
+        self.pos_y = float(self.screen_h - 220)
+        self.move(int(self.pos_x), int(self.pos_y))
+
+        self.speed = 2.2
+        self.dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.last_click_time = 0
+
+        self._load_cat_anim("golden")
+
+        self.connect('draw', self._on_draw)
+        self.connect('button-press-event', self._on_button_press)
+        self.connect('button-release-event', self._on_button_release)
+        self.connect('motion-notify-event', self._on_motion_notify)
+        self.connect('destroy', Gtk.main_quit)
+
+        self.add_events(
+            Gdk.EventMask.BUTTON_PRESS_MASK
+            | Gdk.EventMask.BUTTON_RELEASE_MASK
+            | Gdk.EventMask.POINTER_MOTION_MASK
+        )
+
+        GLib.timeout_add(33, self._on_frame_tick)
+        GLib.timeout_add_seconds(40, self._on_thought_tick)
+        GLib.timeout_add_seconds(1, lambda: self.show_bubble("Purrrrr... following your cursor! 🐾", 5))
+
+    def _load_cat_anim(self, cat_key: str):
+        fname = CONFIRMED_CATS.get(cat_key, "golden-chinchilla.gif")
+        full_path = os.path.join(ASSETS_DIR, fname)
+        if os.path.exists(full_path):
+            anim = GdkPixbuf.PixbufAnimation.new_from_file(full_path)
+            self.image_widget.set_from_animation(anim)
+            self.resize(anim.get_width() + 20, anim.get_height() + 50)
+
+    def _on_frame_tick(self) -> bool:
+        dt = 0.033
+        
+        try:
+            _, mouse_x, mouse_y = self.pointer_device.get_position()
+        except Exception:
+            mouse_x, mouse_y = int(self.pos_x), int(self.pos_y)
+
+        state, changed = self.brain.tick(dt, self.pos_x, mouse_x)
+
+        if changed and not self.dragging:
+            if state == CatState.ROAMING:
+                self._load_cat_anim("fluffy")  # Walking fluffy cat when roaming/following
+            elif state == CatState.ALERT:
+                self._load_cat_anim("ragdoll") # Sitting ragdoll cat
+            else:
+                self._load_cat_anim("golden")  # Resting golden cat
+
+        if state == CatState.ROAMING and not self.dragging:
+            step = self.speed
+            min_x = 60.0
+            max_x = float(self.screen_w - 400)
+
+            if abs(self.pos_x - self.brain.target_x) <= step:
+                self.pos_x = self.brain.target_x
+                self.brain.current_state = CatState.RESTING
+                self.brain.state_time_remaining = random.uniform(10.0, 20.0)
+                self._load_cat_anim("golden")
+            else:
+                self.pos_x += step if self.brain.target_x > self.pos_x else -step
+                self.pos_x = max(min_x, min(max_x, self.pos_x))
+                self.move(int(self.pos_x), int(self.pos_y))
+
+        self.queue_draw()
+        return True
+
+    def _on_thought_tick(self) -> bool:
+        if not self.dragging:
+            self.show_bubble(random.choice(CAT_THOUGHTS), 5)
+        return True
+
+    def show_bubble(self, text: str, duration: int = 4):
+        styled = f"<span background='#11111bcc' foreground='#f5e0dc' weight='bold' size='medium'>  {text}  </span>"
+        self.bubble_label.set_markup(styled)
+        self.bubble_box.show_all()
+        try:
+            subprocess.Popen(['paplay', '/usr/share/sounds/sound-icons/gummy-cat-2.wav'], stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+
+        GLib.timeout_add_seconds(duration, lambda: (self.bubble_box.hide(), False)[1])
+
+    def _on_draw(self, widget, cr):
+        cr.set_operator(cairo.OPERATOR_SOURCE)
+        cr.set_source_rgba(0, 0, 0, 0)
+        cr.paint()
+        cr.set_operator(cairo.OPERATOR_OVER)
+        return False
+
+    def _on_button_press(self, widget, event):
+        now = time.time()
+        if event.button == 1:
+            if now - self.last_click_time < 0.35:
+                self.brain.current_state = CatState.RESTING
+                self.brain.state_time_remaining = 15.0
+                self._load_cat_anim("golden")
+                self.show_bubble("Purrrrrr... ❤️ (Happy cat purrs!)", 4)
+            else:
+                self.dragging = True
+                pos = self.get_position()
+                self.drag_start_x = event.x_root - pos[0]
+                self.drag_start_y = event.y_root - pos[1]
+            self.last_click_time = now
+        elif event.button == 3:
+            self._show_context_menu(event)
+
+    def _on_button_release(self, widget, event):
+        if event.button == 1:
+            self.dragging = False
+            pos = self.get_position()
+            self.pos_x = float(pos[0])
+            self.pos_y = float(pos[1])
+
+    def _on_motion_notify(self, widget, event):
+        if self.dragging:
+            self.pos_x = float(event.x_root - self.drag_start_x)
+            self.pos_y = float(event.y_root - self.drag_start_y)
+            self.move(int(self.pos_x), int(self.pos_y))
+
+    def _show_context_menu(self, event):
+        menu = Gtk.Menu()
+
+        follow_item = Gtk.CheckMenuItem(label="Follow Mouse Cursor 🖱️🐾")
+        follow_item.set_active(self.brain.follow_mouse)
+        def toggle_follow(w):
+            self.brain.follow_mouse = w.get_active()
+            msg = "Following your mouse! 🐾" if self.brain.follow_mouse else "Staying in place! 💤"
+            self.show_bubble(msg, 3)
+        follow_item.connect("toggled", toggle_follow)
+        menu.append(follow_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        pet_item = Gtk.MenuItem(label="Pet Cat ❤️ (or Double-Click)")
+        pet_item.connect("activate", lambda w: (
+            setattr(self.brain, 'current_state', CatState.RESTING),
+            setattr(self.brain, 'state_time_remaining', 15.0),
+            self._load_cat_anim("golden"),
+            self.show_bubble("Purrrrr... ❤️", 3)
+        ))
+        menu.append(pet_item)
+
+        feed_item = Gtk.MenuItem(label="Feed Tuna Fish 🐟")
+        feed_item.connect("activate", lambda w: (
+            setattr(self.brain, 'current_state', CatState.RESTING),
+            setattr(self.brain, 'state_time_remaining', 20.0),
+            self._load_cat_anim("golden"),
+            self.show_bubble("🐟 *munch munch* Delicious tuna! Thank you! 😋", 4)
+        ))
+        menu.append(feed_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        # Select favorite cat
+        cats_item = Gtk.MenuItem(label="Choose Real Cat Breed 🐱")
+        cats_menu = Gtk.Menu()
+        cats_item.set_submenu(cats_menu)
+
+        cat_list = [
+            ("Golden Tabby Cat (Resting on Mat) 🐱", "golden"),
+            ("Fluffy Longhair Cat 🐱", "fluffy"),
+            ("Fluffy Ragdoll Cat 🐱", "ragdoll"),
+            ("Tuxedo Mustache Cat 🐱", "tuxedo"),
+            ("Bengal Leopard Cat 🐱", "bengal"),
+            ("Exotic Shorthair Cat 🐱", "exotic")
+        ]
+        for label, key in cat_list:
+            it = Gtk.MenuItem(label=label)
+            it.connect("activate", lambda w, k=key: self._load_cat_anim(k))
+            cats_menu.append(it)
+        menu.append(cats_item)
+
+        menu.append(Gtk.SeparatorMenuItem())
+
+        quit_item = Gtk.MenuItem(label="Close Cat ❌")
+        quit_item.connect("activate", lambda w: Gtk.main_quit())
+        menu.append(quit_item)
+
+        menu.show_all()
+        menu.popup_at_pointer(event)
+
+
+def main():
+    signal.signal(signal.SIGINT, signal.SIG_DFL)
+    signal.signal(signal.SIGTERM, lambda s, f: Gtk.main_quit())
+
+    guard = SingleInstanceGuard(LOCK_FILE_PATH)
+    if not guard.acquire():
+        try:
+            with open(LOCK_FILE_PATH, 'r') as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, signal.SIGTERM)
+            time.sleep(0.5)
+        except Exception:
+            pass
+        if not guard.acquire():
+            sys.exit(0)
+
+    try:
+        window = DesktopCatWindow()
+        window.show_all()
+        window.present()
+        Gtk.main()
+    finally:
+        guard.release()
+
+
+if __name__ == '__main__':
+    main()
