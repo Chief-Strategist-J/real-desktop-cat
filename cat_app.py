@@ -75,8 +75,14 @@ class X11KeyboardDetector:
     """Detects global keyboard typing activity across any window in X11."""
     def __init__(self):
         self.available = False
+        self.display = None
         try:
             self.x11 = ctypes.cdll.LoadLibrary('libX11.so.6')
+            self.x11.XOpenDisplay.restype = ctypes.c_void_p
+            self.x11.XOpenDisplay.argtypes = [ctypes.c_char_p]
+            self.x11.XQueryKeymap.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+            self.x11.XCloseDisplay.argtypes = [ctypes.c_void_p]
+
             self.display = self.x11.XOpenDisplay(None)
             if self.display:
                 self.available = True
@@ -86,7 +92,7 @@ class X11KeyboardDetector:
             self.available = False
 
     def is_typing(self) -> bool:
-        if not self.available:
+        if not self.available or not self.display:
             return False
         current_keys = (ctypes.c_char * 32)()
         self.x11.XQueryKeymap(self.display, current_keys)
@@ -100,6 +106,7 @@ class X11KeyboardDetector:
         if self.available and self.display:
             try:
                 self.x11.XCloseDisplay(self.display)
+                self.display = None
             except Exception:
                 pass
 
